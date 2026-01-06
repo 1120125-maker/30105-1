@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>8 號出口 3D 版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@700;900&display=swap');
+        
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Noto Sans TC', sans-serif; }
+        #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        .crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 10px; height: 10px; border: 1px solid white;
+            transform: translate(-50%, -50%); border-radius: 50%;
+        }
+
+        .exit-sign {
+            position: absolute; top: 20px; left: 50%;
+            transform: translateX(-50%);
+            background: #ffcc00; color: #000;
+            padding: 10px 40px; font-weight: 900;
+            font-size: 2rem; border: 4px solid black;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+
+        #message {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255,255,255,0.9); color: black;
+            padding: 30px; border-radius: 10px;
+            text-align: center; display: none; pointer-events: auto;
+        }
+
+        .instructions {
+            position: absolute; bottom: 20px; left: 20px;
+            background: rgba(0,0,0,0.6); padding: 10px;
+            border-radius: 5px; font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div class="crosshair"></div>
+        <div class="exit-sign">出口 <span id="exit-number">0</span></div>
+        
+        <div id="message">
+            <h2 id="msg-title" class="text-2xl font-black mb-4"></h2>
+            <p id="msg-content" class="mb-6"></p>
+            <button onclick="resetScene()" class="bg-black text-white px-6 py-2 rounded-full font-bold">繼續前行</button>
+        </div>
+
+        <div class="instructions">
+            W S A D 移動 | 滑鼠旋轉視角<br>
+            觀察長廊：有異狀請回頭，沒異狀請前進
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, player;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let yaw = 0, pitch = 0;
+        let currentExit = 0;
+        let isAnomaly = false;
+        let posters = [];
+        let collisionWalls = [];
+
+        const corridorLength = 40;
+        const wallColor = 0xcccccc;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111111);
+            scene.fog = new THREE.Fog(0x111111, 5, 30);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // 燈光
+            const ambientLight = new THREE.AmbientLight(0x404040, 1);
+            scene.add(ambientLight);
+
+            for (let i = 0; i < 5; i++) {
+                const light = new THREE.PointLight(0xffffff, 0.8, 15);
+                light.position.set(0, 2.8, -i * 10 + 5);
+                light.castShadow = true;
+                scene.add(light);
+            }
+
+            createCorridor();
+            resetScene();
+
+            // 事件監聽
+            document.addEventListener('keydown', (e) => setMove(e.code, true));
+            document.addEventListener('keyup', (e) => setMove(e.code, false));
+            document.addEventListener('mousemove', (e) => {
+                if (document.pointerLockElement === document.body) {
+                    yaw -= e.movementX * 0.002;
+                    pitch -= e.movementY * 0.002;
+                    pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+                }
+            });
+            document.body.onclick = () => document.body.requestPointerLock();
+            window.onresize = () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            };
+
+            animate();
+        }
+
+        function createCorridor() {
+            const loader = new THREE.TextureLoader();
+            
+            // 地板與天花板
+            const floorGeo = new THREE.PlaneGeometry(6, corridorLength);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.z = -corridorLength / 2 + 5;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            const ceil = floor.clone();
+            ceil.position.y = 3;
+            ceil.rotation.x = Math.PI / 2;
+            scene.add(ceil);
+
+            // 牆壁
+            const wallGeo = new THREE.PlaneGeometry(corridorLength, 3);
+            const wallMat = new THREE.MeshStandardMaterial({ color: wallColor });
+            
+            const leftWall = new THREE.Mesh(wallGeo, wallMat);
+            leftWall.rotation.y = Math.PI / 2;
+            leftWall.position.set(-3, 1.5, -corridorLength / 2 + 5);
+            scene.add(leftWall);
+
+            const rightWall = new THREE.Mesh(wallGeo, wallMat);
+            rightWall.rotation.y = -Math.PI / 2;
+            rightWall.position.set(3, 1.5, -corridorLength / 2 + 5);
+            scene.add(rightWall);
+
+            // 裝飾海報
+            for(let i=0; i<3; i++) {
+                const poster = new THREE.Mesh(
+                    new THREE.PlaneGeometry(0.8, 1.2),
+                    new THREE.MeshStandardMaterial({ color: 0x444444 })
+                );
+                poster.position.set(-2.98, 1.5, -5 - i * 8);
+                poster.rotation.y = Math.PI / 2;
+                scene.add(poster);
+                posters.push(poster);
+            }
+        }
+
+        function setMove(code, active) {
+            if (code === 'KeyW') moveForward = active;
+            if (code === 'KeyS') moveBackward = active;
+            if (code === 'KeyA') moveLeft = active;
+            if (code === 'KeyD') moveRight = active;
+        }
+
+        function resetScene() {
+            document.getElementById('message').style.display = 'none';
+            camera.position.set(0, 1.6, 2);
+            yaw = 0;
+            pitch = 0;
+            
+            // 隨機異狀 (40%)
+            isAnomaly = Math.random() < 0.4;
+            
+            // 重置海報
+            posters.forEach(p => {
+                p.scale.set(1, 1, 1);
+                p.material.color.set(0x444444);
+                p.visible = true;
+            });
+
+            if (isAnomaly) {
+                const type = Math.floor(Math.random() * 3);
+                const target = posters[Math.floor(Math.random() * posters.length)];
+                if (type === 0) target.scale.set(3, 3, 1); // 巨型海報
+                if (type === 1) target.material.color.set(0xff0000); // 變紅
+                if (type === 2) target.visible = false; // 消失
+            }
+            
+            gameActive = true;
+        }
+
+        function checkDecision(reachedForward) {
+            gameActive = false;
+            let correct = false;
+            
+            if (isAnomaly) {
+                if (!reachedForward) correct = true; // 有異狀回頭是正確的
+            } else {
+                if (reachedForward) correct = true; // 沒異狀前進是正確的
+            }
+
+            if (correct) {
+                currentExit++;
+                if (currentExit >= 8) {
+                    showDialog("抵達 8 號出口", "你成功逃離了地下長廊。");
+                    currentExit = 0;
+                } else {
+                    showDialog("判斷正確", `目前是 ${currentExit} 號出口，請繼續前進。`);
+                }
+            } else {
+                currentExit = 0;
+                showDialog("發現異狀！", "你做出了錯誤判斷，回到了 0 號出口。");
+            }
+            document.getElementById('exit-number').innerText = currentExit;
+        }
+
+        function showDialog(title, content) {
+            document.getElementById('msg-title').innerText = title;
+            document.getElementById('msg-content').innerText = content;
+            document.getElementById('message').style.display = 'block';
+            document.exitPointerLock();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (document.getElementById('message').style.display === 'none') {
+                camera.rotation.set(pitch, yaw, 0, 'YXZ');
+
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                dir.y = 0; dir.normalize();
+                const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir).normalize();
+
+                if (moveForward) camera.position.addScaledVector(dir, 0.1);
+                if (moveBackward) camera.position.addScaledVector(dir, -0.1);
+                if (moveLeft) camera.position.addScaledVector(side, 0.1);
+                if (moveRight) camera.position.addScaledVector(side, -0.1);
+
+                // 邊界限制
+                camera.position.x = Math.max(-2.5, Math.min(2.5, camera.position.x));
+
+                // 到達前方判定點 (深處)
+                if (camera.position.z < -30) {
+                    checkDecision(true);
+                }
+                // 到達後方判定點 (起點回頭)
+                if (camera.position.z > 4) {
+                    checkDecision(false);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
